@@ -45,11 +45,11 @@ def get_db(force_mock: bool = False):
     sanitized_uri = sanitize_mongo_uri(settings.MONGO_URI)
     try:
         logger.info(f"Attempting connection to MongoDB at: {sanitized_uri}")
-        # Server selection timeout: 5000ms is standard for cloud Atlas
+        # Server selection timeout: 10000ms is resilient for cloud Atlas
         client = pymongo.MongoClient(
             settings.MONGO_URI,
-            serverSelectionTimeoutMS=5000,
-            connectTimeoutMS=5000
+            serverSelectionTimeoutMS=10000,
+            connectTimeoutMS=10000
         )
         # Verify connectivity by issuing a ping
         client.admin.command('ping')
