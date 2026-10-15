@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.database.connection import get_db, is_mock_db, close_db, check_db_health
 from app.database.seed_data import seed_database
-from app.routers import auth, internships, applications, tasks, ai, admin, notifications, announcements
+from app.routers import auth, internships, applications, tasks, ai, admin, notifications, announcements, crm
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -62,6 +62,7 @@ app.include_router(ai.router)
 app.include_router(admin.router)
 app.include_router(notifications.router)
 app.include_router(announcements.router)
+app.include_router(crm.router)
 
 @app.get("/", tags=["Root"])
 def root():

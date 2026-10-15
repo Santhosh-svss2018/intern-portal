@@ -1,6 +1,9 @@
+import logging
 import re
 from typing import List, Dict, Any, Optional
 from app.core.config import settings
+
+logger = logging.getLogger("internconnect.ai")
 
 # Recognized technical skill taxonomy for extraction & matching
 SKILL_TAXONOMY = [
@@ -322,7 +325,7 @@ class AIService:
             if fallback_m not in candidate_models:
                 candidate_models.append(fallback_m)
 
-        client = Client(api_key=api_key)
+        client = Client(api_key=api_key, http_options={"timeout": 5000})
         last_error = None
 
         for model_candidate in candidate_models:
@@ -353,4 +356,194 @@ class AIService:
             "model": f"rule-based-fallback (Provider error: {type(last_error).__name__ if last_error else 'Unavailable'})",
             "provider": "rule-based"
         }
+
+    @staticmethod
+    def generate_candidate_crm_summary(candidate: dict, job: dict) -> dict:
+        """
+        Generate an advisory summary of authorized candidate information for recruiter review.
+        STRICTLY ADVISORY: AI does not make automated hiring decisions.
+        """
+        candidate_name = candidate.get("student_name") or "Candidate"
+        skills = candidate.get("skills") or []
+        skills_str = ", ".join(skills) if skills else "General technical foundations"
+        university = candidate.get("student_university") or "University"
+        degree = candidate.get("student_degree") or "Engineering"
+        job_title = job.get("title") or "Internship Role"
+        required_skills = job.get("skills_required") or []
+        req_str = ", ".join(required_skills) if required_skills else "Full-stack software engineering"
+
+        api_key = settings.AI_API_KEY.strip() if settings.AI_API_KEY else ""
+        if api_key and (api_key.startswith("AIzaSy") or not api_key.startswith("AQ.")):
+            try:
+                from google.genai import Client, types
+                client = Client(api_key=api_key, http_options={"timeout": 5000})
+                prompt = (
+                    f"Candidate Profile:\n"
+                    f"- Name: {candidate_name}\n"
+                    f"- University: {university} ({degree})\n"
+                    f"- Candidate Skills: {skills_str}\n"
+                    f"- Resume Snippet: {candidate.get('resume_text', 'Not provided')[:600]}\n\n"
+                    f"Target Opportunity:\n"
+                    f"- Role: {job_title}\n"
+                    f"- Required Tech Stack: {req_str}\n\n"
+                    f"Generate a concise, professional CRM candidate summary for the recruiter. "
+                    f"Highlight: (1) Core technical strengths and overlap with the role, "
+                    f"(2) Coursework and project indicators, "
+                    f"(3) Two specific technical topics for the interviewer to probe. "
+                    f"IMPORTANT: Do not make an automated hiring decision. Conclude with an explicit reminder that live interview performance determines progression."
+                )
+                system_instruction = (
+                    "You are the InternConnect AI Recruiter Talent Assistant. "
+                    "Provide factual, objective, and constructive evaluations of student candidate qualifications. "
+                    "Never make automated hire/reject decisions."
+                )
+
+                model_to_use = settings.GEMINI_MODEL or "gemini-3.8-flash"
+                res = client.models.generate_content(
+                    model=model_to_use,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        temperature=0.4
+                    )
+                )
+                if res and res.text:
+                    text = res.text.strip()
+                    matched = [s for s in required_skills if any(s.lower() in cs.lower() for cs in skills)]
+                    gaps = [s for s in required_skills if not any(s.lower() in cs.lower() for cs in skills)]
+                    return {
+                        "summary": text,
+                        "key_strengths": matched if matched else skills[:4],
+                        "suggested_verification_areas": gaps if gaps else ["System design tradeoffs", "Concurrency control"],
+                        "recommended_stage": "Screening / Technical Assessment",
+                        "provider": "google-gemini",
+                        "disclaimer": "AI-generated candidate overview for recruiter reference. Not an automated hiring decision."
+                    }
+            except Exception as e:
+                logger.warning(f"Gemini API CRM summary generation fallback: {e}")
+
+        # Rule-based fallback
+        matched = [s for s in required_skills if any(s.lower() in cs.lower() for cs in skills)]
+        missing = [s for s in required_skills if not any(s.lower() in cs.lower() for cs in skills)]
+        summary_text = (
+            f"### Recruiter Candidate Brief: {candidate_name}\n\n"
+            f"**Academic Background**: Enrolled at {university} pursuing {degree}.\n\n"
+            f"**Technical Alignment**: Demonstrates strong proficiency in {', '.join(skills[:4]) if skills else 'core computing fundamentals'}. "
+            f"Directly satisfies core role criteria for {', '.join(matched) if matched else 'foundational software development'}.\n\n"
+            f"**Areas to Probe in Live Interview**: Verify hands-on depth in {', '.join(missing[:2]) if missing else 'distributed systems edge cases and testing best practices'}.\n\n"
+            f"> *Note: This summary is prepared as an informational briefing for interviewers. Automated hiring decisions are disabled.*"
+        )
+        return {
+            "summary": summary_text,
+            "key_strengths": matched if matched else skills[:4],
+            "suggested_verification_areas": missing[:3] if missing else ["Production observability", "Unit test coverage"],
+            "recommended_stage": "Screening / Technical Assessment",
+            "provider": "rule-based",
+            "disclaimer": "AI-generated candidate overview for recruiter reference. Not an automated hiring decision."
+        }
+
+    @staticmethod
+    def generate_crm_interview_questions(candidate: dict, job: dict, round_type: str = "Technical Round") -> dict:
+        """
+        Generate tailored interview questions and follow-up probes based on candidate background and role.
+        """
+        candidate_name = candidate.get("student_name") or "Candidate"
+        skills = candidate.get("skills") or []
+        job_title = job.get("title") or "Engineering Intern"
+        company_name = job.get("company_name") or "Enterprise"
+        required_skills = job.get("skills_required") or []
+
+        api_key = settings.AI_API_KEY.strip() if settings.AI_API_KEY else ""
+        if api_key and (api_key.startswith("AIzaSy") or not api_key.startswith("AQ.")):
+            try:
+                import json
+                from google.genai import Client, types
+                client = Client(api_key=api_key, http_options={"timeout": 5000})
+                prompt = (
+                    f"Role: {job_title} at {company_name}\n"
+                    f"Candidate: {candidate_name}\n"
+                    f"Skills: {', '.join(skills)}\n"
+                    f"Required Skills: {', '.join(required_skills)}\n"
+                    f"Round Type: {round_type}\n\n"
+                    f"Generate exactly 4 targeted interview questions. For each question provide: "
+                    f"(1) 'question': clear, realistic technical or situational question, "
+                    f"(2) 'intent': what competency the interviewer is assessing, "
+                    f"(3) 'follow_up_prompts': a list of 2 probing follow-up questions to test depth. "
+                    f"Return ONLY a valid JSON array of objects with keys 'question', 'intent', and 'follow_up_prompts'."
+                )
+                model_to_use = settings.GEMINI_MODEL or "gemini-3.8-flash"
+                res = client.models.generate_content(
+                    model=model_to_use,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.5
+                    )
+                )
+                if res and res.text:
+                    clean_text = res.text.strip()
+                    if clean_text.startswith("```"):
+                        clean_text = re.sub(r"^```(?:json)?\n?", "", clean_text)
+                        clean_text = re.sub(r"\n?```$", "", clean_text)
+                    parsed = json.loads(clean_text)
+                    if isinstance(parsed, list) and len(parsed) > 0:
+                        return {
+                            "candidate_name": candidate_name,
+                            "internship_title": job_title,
+                            "round_type": round_type,
+                            "questions": parsed,
+                            "provider": "google-gemini",
+                            "disclaimer": "AI-generated questions for interviewer guidance only. Recruiter discretion advised."
+                        }
+            except Exception as e:
+                logger.warning(f"Gemini API CRM questions generation fallback: {e}")
+
+        # Deterministic rich fallback
+        primary_skill = skills[0] if skills else "Python"
+        secondary_skill = skills[1] if len(skills) > 1 else "React"
+        req_skill = required_skills[0] if required_skills else "Distributed Systems"
+
+        questions = [
+            {
+                "question": f"In your experience with {primary_skill}, walk us through how you handle asynchronous state management and latency bottlenecks in high-volume endpoints.",
+                "intent": f"Assesses hands-on architectural competence and concurrency handling in {primary_skill}.",
+                "follow_up_prompts": [
+                    "What specific profiling tools or telemetry did you use to identify the bottleneck?",
+                    "How would your approach change if data throughput increased by a factor of 50x?"
+                ]
+            },
+            {
+                "question": f"At {company_name}, reliability is paramount. How do you design APIs using {secondary_skill} to ensure graceful degradation when upstream dependencies fail?",
+                "intent": "Evaluates fault tolerance, circuit breakers, and error recovery strategies.",
+                "follow_up_prompts": [
+                    "How do you distinguish between transient network retries and permanent database errors?",
+                    "What fallback UI/API responses do you provide to the end user?"
+                ]
+            },
+            {
+                "question": f"Describe a project where you had to bridge {primary_skill} with {req_skill}. What was the most challenging technical tradeoff you encountered?",
+                "intent": "Tests problem-solving depth, technical trade-off evaluation, and practical integration skills.",
+                "follow_up_prompts": [
+                    "If you had another two weeks on that project, what would you re-architect?",
+                    "How did you validate data integrity and backward compatibility?"
+                ]
+            },
+            {
+                "question": "Can you share a time when you received rigorous code review feedback or had to resolve an engineering disagreement with a teammate?",
+                "intent": "Assesses technical communication, receptivity to mentorship, and collaborative problem solving.",
+                "follow_up_prompts": [
+                    "What technical criteria did you use to reach consensus?",
+                    "What did you learn that changed how you write code today?"
+                ]
+            }
+        ]
+
+        return {
+            "candidate_name": candidate_name,
+            "internship_title": job_title,
+            "round_type": round_type,
+            "questions": questions,
+            "provider": "rule-based",
+            "disclaimer": "AI-generated questions for interviewer guidance only. Recruiter discretion advised."
+        }
+
 

@@ -319,3 +319,194 @@ class NotificationResponse(BaseModel):
     read: bool
     created_at: str
 
+# ================= CRM SCHEMAS =================
+class CRMStageUpdate(BaseModel):
+    stage: str # "applied", "screening", "shortlisted", "interview", "offer", "hired", "rejected"
+    feedback: Optional[str] = None
+    current_stage: Optional[str] = None
+
+class CRMNoteCreate(BaseModel):
+    content: str = Field(..., min_length=1, max_length=5000)
+
+class CRMNoteResponse(BaseModel):
+    id: str
+    author_id: str
+    author_name: str
+    author_role: str
+    content: str
+    created_at: str
+
+class CRMTaskCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    due_date: Optional[str] = None
+    priority: str = "medium" # "high", "medium", "low"
+    assigned_to: Optional[str] = None
+
+class CRMTaskUpdate(BaseModel):
+    completed: Optional[bool] = None
+    title: Optional[str] = None
+    due_date: Optional[str] = None
+    priority: Optional[str] = None
+
+class CRMTaskResponse(BaseModel):
+    id: str
+    title: str
+    due_date: Optional[str] = None
+    priority: str = "medium"
+    assigned_to: Optional[str] = None
+    completed: bool = False
+    completed_at: Optional[str] = None
+    created_at: str
+
+class CRMInterviewOutcomeCreate(BaseModel):
+    round_type: str = "Technical Round"
+    rating: int = Field(..., ge=1, le=5)
+    recommendation: str = "hire" # "strong_hire", "hire", "hold", "no_hire"
+    strengths: Optional[str] = None
+    concerns: Optional[str] = None
+    notes: Optional[str] = None
+    scheduled_date: Optional[str] = None
+
+class CRMInterviewOutcomeResponse(BaseModel):
+    id: str
+    interviewer_id: str
+    interviewer_name: str
+    round_type: str
+    rating: int
+    recommendation: str
+    strengths: Optional[str] = None
+    concerns: Optional[str] = None
+    notes: Optional[str] = None
+    scheduled_date: Optional[str] = None
+    created_at: str
+
+class CRMActivityTimelineItem(BaseModel):
+    id: str
+    action: str
+    title: str
+    details: Optional[str] = None
+    actor_id: str
+    actor_name: str
+    actor_role: str
+    timestamp: str
+
+class CRMCandidateCard(BaseModel):
+    id: str
+    internship_id: str
+    internship_title: str
+    student_id: str
+    student_name: str
+    student_email: Optional[str] = None
+    student_university: Optional[str] = None
+    student_degree: Optional[str] = None
+    student_avatar: Optional[str] = None
+    skills: List[str] = []
+    stage: str
+    status: str
+    ai_match_percentage: int = 85
+    applied_at: str
+    interview_date: Optional[str] = None
+    interview_notes: Optional[str] = None
+    notes_count: int = 0
+    pending_tasks_count: int = 0
+    latest_note: Optional[str] = None
+    last_activity_at: Optional[str] = None
+
+class CRMPipelineResponse(BaseModel):
+    stages: dict
+    stage_counts: dict
+    total_candidates: int
+
+class CRMCandidatesListResponse(BaseModel):
+    candidates: List[CRMCandidateCard]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+class CRMCandidateDetail(BaseModel):
+    id: str
+    internship_id: str
+    internship_title: str
+    company_id: Optional[str] = None
+    company_name: str
+    student_id: str
+    student_name: str
+    student_email: Optional[str] = None
+    student_university: Optional[str] = None
+    student_degree: Optional[str] = None
+    student_avatar: Optional[str] = None
+    skills: List[str] = []
+    stage: str
+    status: str
+    ai_match_percentage: int = 85
+    ai_insight: Optional[str] = None
+    applied_at: str
+    interview_date: Optional[str] = None
+    interview_notes: Optional[str] = None
+    resume_text: Optional[str] = None
+    portfolio_url: Optional[str] = None
+    github_url: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    gpa: Optional[str] = None
+    bio: Optional[str] = None
+    recruiter_notes: List[CRMNoteResponse] = []
+    follow_up_tasks: List[CRMTaskResponse] = []
+    interview_feedback: List[CRMInterviewOutcomeResponse] = []
+    activity_timeline: List[CRMActivityTimelineItem] = []
+    status_history: List[StatusHistoryItem] = []
+
+class CRMAnalyticsResponse(BaseModel):
+    applied_count: int = 0
+    screening_count: int = 0
+    shortlisted_count: int = 0
+    interview_count: int = 0
+    offer_count: int = 0
+    hired_count: int = 0
+    rejected_count: int = 0
+    total_candidates: int = 0
+    screening_rate: str = "0%"
+    shortlist_rate: str = "0%"
+    interview_rate: str = "0%"
+    offer_rate: str = "0%"
+    hire_rate: str = "0%"
+    overall_hire_rate: str = "0%"
+    pending_followups_count: int = 0
+    overdue_tasks_count: int = 0
+    active_postings_count: int = 0
+
+class CRMPendingFollowupItem(BaseModel):
+    task_id: str
+    application_id: str
+    candidate_id: str
+    candidate_name: str
+    candidate_avatar: Optional[str] = None
+    internship_title: str
+    title: str
+    due_date: Optional[str] = None
+    priority: str = "medium"
+    is_overdue: bool = False
+    created_at: str
+
+class CRMAISummaryResponse(BaseModel):
+    summary: str
+    key_strengths: List[str] = []
+    suggested_verification_areas: List[str] = []
+    recommended_stage: Optional[str] = None
+    provider: str
+    disclaimer: str = "AI-generated candidate overview for recruiter reference. Not an automated hiring decision."
+
+class CRMAIQuestionItem(BaseModel):
+    question: str
+    intent: str
+    follow_up_prompts: List[str] = []
+
+class CRMAIInterviewQuestionsResponse(BaseModel):
+    candidate_name: str
+    internship_title: str
+    round_type: str
+    questions: List[CRMAIQuestionItem] = []
+    provider: str
+    disclaimer: str = "AI-generated questions for interviewer guidance only. Recruiter discretion advised."
+
+

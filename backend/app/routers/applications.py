@@ -9,8 +9,8 @@ from app.services.ai_service import AIService
 
 logger = logging.getLogger("internconnect.applications")
 
-VALID_STATUSES = {"applied", "in_review", "shortlisted", "interview", "rejected", "accepted"}
-TERMINAL_STATUSES = {"rejected", "accepted"}
+VALID_STATUSES = {"applied", "in_review", "screening", "shortlisted", "interview", "rejected", "accepted", "offer", "hired"}
+TERMINAL_STATUSES = {"rejected", "accepted", "hired"}
 
 def check_recruiter_ownership(app_doc: dict, current_user: dict, db) -> bool:
     user_id = current_user.get("id")
@@ -277,6 +277,8 @@ def update_application_status(
     STATUS_ALIAS_MAP = {
         "under_review": "in_review",
         "under review": "in_review",
+        "screening": "in_review",
+        "offer": "accepted",
         "selected": "accepted",
         "declined": "rejected"
     }
@@ -302,12 +304,13 @@ def update_application_status(
                 detail=f"Concurrency conflict: expected current status '{status_update.current_status}' but found '{current_status}'"
             )
 
-    # Reject invalid transition from terminal states
-    if current_status in TERMINAL_STATUSES and new_status != current_status:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot transition application from terminal status '{current_status}' to '{new_status}'"
-        )
+    # Reject invalid transition from terminal states (allow accepted -> hired)
+    if current_status in TERMINAL_STATUSES:
+        if not (current_status == "accepted" and new_status == "hired") and new_status != current_status:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot transition application from terminal status '{current_status}' to '{new_status}'"
+            )
 
     now_iso = datetime.now(timezone.utc).isoformat()
     update_fields = {"status": new_status}

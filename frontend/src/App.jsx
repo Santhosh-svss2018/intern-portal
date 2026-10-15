@@ -116,6 +116,14 @@ export default function App() {
                 path="/recruiter"
                 element={<Navigate to="/company" replace />}
               />
+              <Route
+                path="/crm"
+                element={<Navigate to="/company" replace />}
+              />
+              <Route
+                path="/company/crm"
+                element={<Navigate to="/company" replace />}
+              />
 
               {/* Mentor Routes */}
               <Route

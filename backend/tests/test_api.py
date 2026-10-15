@@ -1477,4 +1477,366 @@ def test_mentor_access_and_task_assignment_restricted_to_assigned_students():
     assert valid_task.json()["intern_id"] == sx_id
 
 
+# ============================================================================
+# CRM MODULE TESTS (PIPELINE, STAGES, NOTES, TASKS, ANALYTICS, GEMINI AI, RBAC)
+# ============================================================================
+
+def test_crm_pipeline_kanban_and_scoping():
+    """Verify recruiter CRM pipeline groups candidates across 7 Kanban stages with company scoping."""
+    # 1. Login as default seeded recruiter
+    rec_res = client.post("/api/auth/login", json={"email": "recruiter@enterprise.com", "password": "password123"})
+    assert rec_res.status_code == 200
+    token = rec_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 2. Fetch pipeline
+    pipe_res = client.get("/api/crm/pipeline", headers=headers)
+    assert pipe_res.status_code == 200
+    data = pipe_res.json()
+
+    assert "stages" in data
+    assert "stage_counts" in data
+    assert "total_candidates" in data
+    assert data["total_candidates"] >= 3
+
+    # Check 7 canonical stages exist
+    for stage_name in ["applied", "screening", "shortlisted", "interview", "offer", "hired", "rejected"]:
+        assert stage_name in data["stages"]
+        assert stage_name in data["stage_counts"]
+
+    # Verify candidates are partitioned into correct stages
+    interview_cands = data["stages"]["interview"]
+    assert any(c["student_name"] == "David Kim" for c in interview_cands)
+
+
+def test_crm_candidate_search_and_pagination():
+    """Verify searching by name, university, skills, stage filtering, and pagination."""
+    rec_res = client.post("/api/auth/login", json={"email": "recruiter@enterprise.com", "password": "password123"})
+    token = rec_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 1. Search by name 'Alex'
+    search_alex = client.get("/api/crm/candidates?search=Alex", headers=headers)
+    assert search_alex.status_code == 200
+    d_alex = search_alex.json()
+    assert d_alex["total"] >= 1
+    assert any("Alex" in c["student_name"] for c in d_alex["candidates"])
+
+    # 2. Search by skill 'Kubernetes'
+    search_k8s = client.get("/api/crm/candidates?search=Kubernetes", headers=headers)
+    assert search_k8s.status_code == 200
+    assert any("Kubernetes" in c["skills"] for c in search_k8s.json()["candidates"])
+
+    # 3. Filter by stage 'interview'
+    stage_res = client.get("/api/crm/candidates?stage=interview", headers=headers)
+    assert stage_res.status_code == 200
+    for cand in stage_res.json()["candidates"]:
+        assert cand["stage"] == "interview"
+
+    # 4. Pagination check
+    page_res = client.get("/api/crm/candidates?page=1&page_size=2", headers=headers)
+    assert page_res.status_code == 200
+    assert len(page_res.json()["candidates"]) <= 2
+    assert page_res.json()["page"] == 1
+
+
+def test_crm_candidate_detail_and_idor_protection():
+    """Verify candidate detail returns rich profiles, and Company A cannot access Company B's candidates."""
+    db = get_db()
+    # 1. Create a distinct Company B and candidate application for Company B
+    reg_b = client.post("/api/auth/register", json={
+        "email": "corp_b_crm@enterprise.com",
+        "password": "password123",
+        "full_name": "Beta Corp CRM",
+        "role": "company"
+    })
+    token_b = reg_b.json()["access_token"]
+    user_b_id = reg_b.json()["user"]["id"]
+
+    # Beta Corp posting
+    post_res = client.post(
+        "/api/internships",
+        headers={"Authorization": f"Bearer {token_b}"},
+        json={
+            "title": "Quantum Algorithm Intern",
+            "company_name": "Beta Corp CRM",
+            "location": "Boston, MA",
+            "work_mode": "Hybrid",
+            "stipend": "$60/hr",
+            "skills_required": ["Python", "Qiskit"],
+            "description": "Quantum algorithms engineering",
+            "deadline": "Rolling"
+        }
+    )
+    b_int_id = post_res.json()["id"]
+
+    # Student registers and applies to Beta Corp
+    reg_s = client.post("/api/auth/register", json={
+        "email": "beta_applicant@mit.edu",
+        "password": "password123",
+        "full_name": "Quantum Explorer",
+        "role": "student"
+    })
+    token_s = reg_s.json()["access_token"]
+    app_res = client.post(
+        "/api/applications",
+        headers={"Authorization": f"Bearer {token_s}"},
+        json={"internship_id": b_int_id}
+    )
+    b_app_id = app_res.json()["id"]
+
+    # 2. Company B can read candidate detail -> 200 OK
+    detail_b = client.get(f"/api/crm/candidates/{b_app_id}", headers={"Authorization": f"Bearer {token_b}"})
+    assert detail_b.status_code == 200
+    assert detail_b.json()["student_name"] == "Quantum Explorer"
+    assert detail_b.json()["stage"] == "applied"
+
+    # 3. Recruiter from TechCorp tries to read Beta Corp's candidate -> 403 Forbidden (IDOR Protected)
+    rec_a = client.post("/api/auth/login", json={"email": "recruiter@enterprise.com", "password": "password123"})
+    token_a = rec_a.json()["access_token"]
+
+    idor_res = client.get(f"/api/crm/candidates/{b_app_id}", headers={"Authorization": f"Bearer {token_a}"})
+    assert idor_res.status_code == 403
+    assert "Access denied" in idor_res.json()["detail"]
+
+
+def test_crm_stage_transition_and_activity_timeline():
+    """Verify recruiter can move candidate between stages, creating timeline history and student notification."""
+    db = get_db()
+    rec_res = client.post("/api/auth/login", json={"email": "recruiter@enterprise.com", "password": "password123"})
+    token = rec_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Find candidate in 'applied' stage
+    alex_doc = db.applications.find_one({"student_name": "Alex Morgan"})
+    alex_id = str(alex_doc["_id"])
+    db.applications.update_one({"_id": to_object_id(alex_id)}, {"$set": {"status": "applied"}})
+
+    # 1. Advance Alex from 'applied' to 'screening'
+    move_res = client.patch(
+        f"/api/crm/candidates/{alex_id}/stage",
+        headers=headers,
+        json={"stage": "screening", "feedback": "Reviewed GitHub portfolio. Proceeding with resume screen."}
+    )
+    assert move_res.status_code == 200
+    assert move_res.json()["stage"] == "screening"
+
+    # 2. Advance Alex to 'shortlisted'
+    shortlist_res = client.patch(
+        f"/api/crm/candidates/{alex_id}/stage",
+        headers=headers,
+        json={"stage": "shortlisted", "feedback": "Passed screening assessment."}
+    )
+    assert shortlist_res.status_code == 200
+    assert shortlist_res.json()["stage"] == "shortlisted"
+
+    # 3. Check candidate detail activity timeline
+    detail = client.get(f"/api/crm/candidates/{alex_id}", headers=headers).json()
+    assert detail["stage"] == "shortlisted"
+    act_actions = [a["action"] for a in detail["activity_timeline"]]
+    assert "stage_changed" in act_actions
+
+    # 4. Attempting to set an invalid stage name -> 400 Bad Request
+    invalid_res = client.patch(
+        f"/api/crm/candidates/{alex_id}/stage",
+        headers=headers,
+        json={"stage": "completely_bogus_stage"}
+    )
+    assert invalid_res.status_code == 400
+
+
+def test_crm_recruiter_notes_crud_and_privacy():
+    """Verify adding/deleting recruiter notes, and ensure student endpoint never exposes private notes."""
+    db = get_db()
+    rec_res = client.post("/api/auth/login", json={"email": "recruiter@enterprise.com", "password": "password123"})
+    token = rec_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    alex_doc = db.applications.find_one({"student_name": "Alex Morgan"})
+    alex_id = str(alex_doc["_id"])
+
+    # 1. Add confidential note
+    note_res = client.post(
+        f"/api/crm/candidates/{alex_id}/notes",
+        headers=headers,
+        json={"content": "Candidate has excellent communication skills and deep understanding of Redis."}
+    )
+    assert note_res.status_code == 200
+    note_data = note_res.json()
+    assert "id" in note_data
+    assert "Redis" in note_data["content"]
+    note_id = note_data["id"]
+
+    # 2. Read detail as recruiter -> note present
+    rec_detail = client.get(f"/api/crm/candidates/{alex_id}", headers=headers).json()
+    assert any(n["id"] == note_id for n in rec_detail["recruiter_notes"])
+
+    # 3. Read detail as student -> confidential notes NOT in student ApplicationResponse schema
+    stud_res = client.post("/api/auth/login", json={"email": "sarah.lin@berkeley.edu", "password": "password123"})
+    if stud_res.status_code != 200:
+        stud_res = client.post("/api/auth/login", json={"email": "student@university.edu", "password": "password123"})
+        if stud_res.status_code != 200:
+            stud_res = client.post("/api/auth/login", json={"email": "student@university.edu", "password": "newSecurePassword456"})
+    s_token = stud_res.json()["access_token"]
+    stud_detail = client.get(f"/api/applications/{alex_id}", headers={"Authorization": f"Bearer {s_token}"}).json()
+    assert "recruiter_notes" not in stud_detail
+
+    # 4. Delete note
+    del_res = client.delete(f"/api/crm/candidates/{alex_id}/notes/{note_id}", headers=headers)
+    assert del_res.status_code == 200
+
+    # Verify deleted
+    rec_detail_after = client.get(f"/api/crm/candidates/{alex_id}", headers=headers).json()
+    assert not any(n["id"] == note_id for n in rec_detail_after["recruiter_notes"])
+
+
+def test_crm_follow_up_tasks_and_pending_endpoint():
+    """Verify follow-up tasks with due dates and pending follow-ups feed."""
+    db = get_db()
+    rec_res = client.post("/api/auth/login", json={"email": "recruiter@enterprise.com", "password": "password123"})
+    token = rec_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    alex_doc = db.applications.find_one({"student_name": "Alex Morgan"})
+    alex_id = str(alex_doc["_id"])
+
+    # 1. Add follow-up task
+    task_res = client.post(
+        f"/api/crm/candidates/{alex_id}/tasks",
+        headers=headers,
+        json={
+            "title": "Send take-home coding assessment",
+            "due_date": "2026-12-01",
+            "priority": "high"
+        }
+    )
+    assert task_res.status_code == 200
+    task_id = task_res.json()["id"]
+
+    # 2. Check pending follow-ups feed
+    pending_res = client.get("/api/crm/pending-followups", headers=headers)
+    assert pending_res.status_code == 200
+    pending_list = pending_res.json()
+    assert any(p["task_id"] == task_id for p in pending_list)
+
+    # 3. Mark task completed
+    update_res = client.patch(
+        f"/api/crm/candidates/{alex_id}/tasks/{task_id}",
+        headers=headers,
+        json={"completed": True}
+    )
+    assert update_res.status_code == 200
+    assert update_res.json()["task"]["completed"] is True
+
+    # 4. Now verify task is no longer in pending feed
+    pending_after = client.get("/api/crm/pending-followups", headers=headers).json()
+    assert not any(p["task_id"] == task_id for p in pending_after)
+
+
+def test_crm_interview_outcome_recording():
+    """Verify recording structured interview feedback, rating (1-5), and recommendation."""
+    db = get_db()
+    rec_res = client.post("/api/auth/login", json={"email": "recruiter@enterprise.com", "password": "password123"})
+    token = rec_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    alex_doc = db.applications.find_one({"student_name": "Alex Morgan"})
+    alex_id = str(alex_doc["_id"])
+
+    # Record interview outcome
+    outcome_res = client.post(
+        f"/api/crm/candidates/{alex_id}/interviews",
+        headers=headers,
+        json={
+            "round_type": "System Design Round",
+            "rating": 5,
+            "recommendation": "strong_hire",
+            "strengths": "Clear grasp of sharding, replication, and distributed locking.",
+            "concerns": "Minor: limited experience with Apache Kafka.",
+            "notes": "Recommend extending offer for backend team.",
+            "scheduled_date": "Next Monday at 10:00 AM"
+        }
+    )
+    assert outcome_res.status_code == 200
+    outcome_data = outcome_res.json()
+    assert outcome_data["rating"] == 5
+    assert outcome_data["recommendation"] == "strong_hire"
+
+    # Verify reflected in candidate detail
+    detail = client.get(f"/api/crm/candidates/{alex_id}", headers=headers).json()
+    assert any(i["round_type"] == "System Design Round" for i in detail["interview_feedback"])
+
+
+def test_crm_analytics_and_conversion_rates():
+    """Verify CRM analytics metrics and conversion percentages calculate accurately."""
+    rec_res = client.post("/api/auth/login", json={"email": "recruiter@enterprise.com", "password": "password123"})
+    token = rec_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    analytics_res = client.get("/api/crm/analytics", headers=headers)
+    assert analytics_res.status_code == 200
+    data = analytics_res.json()
+
+    assert data["total_candidates"] >= 3
+    assert "screening_rate" in data
+    assert "shortlist_rate" in data
+    assert "interview_rate" in data
+    assert "offer_rate" in data
+    assert "hire_rate" in data
+    assert "overall_hire_rate" in data
+    assert "pending_followups_count" in data
+
+
+def test_crm_gemini_ai_summary_and_questions():
+    """Verify Gemini AI candidate summary and interview questions generation with disclaimers."""
+    db = get_db()
+    rec_res = client.post("/api/auth/login", json={"email": "recruiter@enterprise.com", "password": "password123"})
+    token = rec_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    alex_doc = db.applications.find_one({"student_name": "Alex Morgan"})
+    alex_id = str(alex_doc["_id"])
+
+    # 1. AI Summary
+    summary_res = client.post(f"/api/crm/candidates/{alex_id}/ai-summary", headers=headers)
+    assert summary_res.status_code == 200
+    s_data = summary_res.json()
+    assert "summary" in s_data
+    assert len(s_data["key_strengths"]) > 0
+    assert "Not an automated hiring decision" in s_data["disclaimer"]
+
+    # 2. AI Interview Questions
+    q_res = client.post(f"/api/crm/candidates/{alex_id}/ai-interview-questions?round_type=Technical+Screen", headers=headers)
+    assert q_res.status_code == 200
+    q_data = q_res.json()
+    assert len(q_data["questions"]) >= 3
+    assert "follow_up_prompts" in q_data["questions"][0]
+    assert "Recruiter discretion advised" in q_data["disclaimer"]
+
+
+def test_crm_rbac_student_forbidden():
+    """Verify unauthorized roles (student, mentor) cannot access recruiter CRM endpoints."""
+    # Student token
+    stud_res = client.post("/api/auth/login", json={"email": "sarah.lin@berkeley.edu", "password": "password123"})
+    if stud_res.status_code != 200:
+        stud_res = client.post("/api/auth/login", json={"email": "student@university.edu", "password": "password123"})
+        if stud_res.status_code != 200:
+            stud_res = client.post("/api/auth/login", json={"email": "student@university.edu", "password": "newSecurePassword456"})
+    s_token = stud_res.json()["access_token"]
+    s_headers = {"Authorization": f"Bearer {s_token}"}
+
+    # Pipeline forbidden for student
+    res1 = client.get("/api/crm/pipeline", headers=s_headers)
+    assert res1.status_code == 403
+
+    # Candidates list forbidden for student
+    res2 = client.get("/api/crm/candidates", headers=s_headers)
+    assert res2.status_code == 403
+
+    # Analytics forbidden for student
+    res3 = client.get("/api/crm/analytics", headers=s_headers)
+    assert res3.status_code == 403
+
+
+
 

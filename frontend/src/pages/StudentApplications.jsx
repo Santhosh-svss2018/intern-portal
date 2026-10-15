@@ -41,6 +41,14 @@ const STATUS_CONFIG = {
     badge: 'bg-blue-50 text-blue-700 border-blue-200',
     icon: Eye,
   },
+  screening: {
+    label: 'Screening',
+    title: 'Application Screening',
+    color: 'bg-blue-600',
+    dotBg: 'bg-blue-100 text-blue-700 border-blue-300',
+    badge: 'bg-blue-50 text-blue-700 border-blue-200',
+    icon: Eye,
+  },
   shortlisted: {
     label: 'Shortlisted',
     title: 'Shortlisted by Recruiter',
@@ -57,6 +65,14 @@ const STATUS_CONFIG = {
     badge: 'bg-indigo-50 text-indigo-700 border-indigo-200',
     icon: Video,
   },
+  offer: {
+    label: 'Offer Extended',
+    title: 'Offer Extended',
+    color: 'bg-emerald-600',
+    dotBg: 'bg-emerald-100 text-emerald-700 border-emerald-300',
+    badge: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    icon: CheckCircle2,
+  },
   accepted: {
     label: 'Selected',
     title: 'Candidate Selected / Offer Extended',
@@ -64,6 +80,14 @@ const STATUS_CONFIG = {
     dotBg: 'bg-emerald-100 text-emerald-700 border-emerald-300',
     badge: 'bg-emerald-50 text-emerald-700 border-emerald-200',
     icon: CheckCircle2,
+  },
+  hired: {
+    label: 'Hired',
+    title: 'Candidate Hired & Offer Finalized',
+    color: 'bg-emerald-600',
+    dotBg: 'bg-emerald-100 text-emerald-700 border-emerald-300',
+    badge: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    icon: UserCheck,
   },
   rejected: {
     label: 'Declined',
@@ -153,17 +177,24 @@ export default function StudentApplications() {
   };
 
   const getStepStatus = (stepKey, appStatus) => {
+    const normalizedStatus =
+      appStatus === 'screening'
+        ? 'in_review'
+        : appStatus === 'offer' || appStatus === 'hired'
+        ? 'accepted'
+        : appStatus;
+
     const order = ['applied', 'in_review', 'shortlisted', 'interview', 'decision'];
     const currentIdx =
-      appStatus === 'accepted' || appStatus === 'rejected'
+      normalizedStatus === 'accepted' || normalizedStatus === 'rejected'
         ? 4
-        : order.indexOf(appStatus);
+        : order.indexOf(normalizedStatus);
 
     const stepIdx = order.indexOf(stepKey);
 
     if (stepKey === 'decision') {
-      if (appStatus === 'accepted') return 'accepted';
-      if (appStatus === 'rejected') return 'rejected';
+      if (normalizedStatus === 'accepted') return 'accepted';
+      if (normalizedStatus === 'rejected') return 'rejected';
       return 'pending';
     }
 

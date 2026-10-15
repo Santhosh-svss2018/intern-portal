@@ -158,6 +158,7 @@ export default function NavigationDrawer({ isOpen, onClose }) {
               <>
                 <NavLink
                   to="/company"
+                  end
                   onClick={onClose}
                   className={({ isActive }) =>
                     `flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
@@ -166,7 +167,23 @@ export default function NavigationDrawer({ isOpen, onClose }) {
                   }
                 >
                   <LayoutDashboard className="w-4 h-4 text-indigo-600" />
-                  <span>Recruiter Hub</span>
+                  <span>CRM Pipeline Kanban</span>
+                </NavLink>
+                <NavLink
+                  to="/company?view=candidates"
+                  onClick={onClose}
+                  className="flex items-center gap-3 px-3 py-2 rounded-lg text-slate-600 hover:bg-slate-50"
+                >
+                  <Users className="w-4 h-4 text-indigo-600" />
+                  <span>Candidate Directory</span>
+                </NavLink>
+                <NavLink
+                  to="/company?view=postings"
+                  onClick={onClose}
+                  className="flex items-center gap-3 px-3 py-2 rounded-lg text-slate-600 hover:bg-slate-50"
+                >
+                  <Briefcase className="w-4 h-4 text-indigo-600" />
+                  <span>Role Postings</span>
                 </NavLink>
                 <NavLink
                   to="/student/explore"
@@ -175,6 +192,14 @@ export default function NavigationDrawer({ isOpen, onClose }) {
                 >
                   <Briefcase className="w-4 h-4 text-indigo-600" />
                   <span>Explore Market</span>
+                </NavLink>
+                <NavLink
+                  to="/student/ai-coach"
+                  onClick={onClose}
+                  className="flex items-center gap-3 px-3 py-2 rounded-lg text-slate-600 hover:bg-slate-50"
+                >
+                  <Sparkles className="w-4 h-4 text-teal-600" />
+                  <span>AI Career Assistant</span>
                 </NavLink>
               </>
             )}
