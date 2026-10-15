@@ -10,9 +10,11 @@ from app.routers import auth, internships, applications, tasks, ai, admin, notif
 async def lifespan(app: FastAPI):
     # Startup: Connect and verify database
     db = get_db()
-    # Prevent automatic seeding in production or when explicitly disabled
+    # Seed database if in development, or if explicitly enabled via AUTO_SEED
     import os
-    if settings.ENVIRONMENT != "production" and os.getenv("DISABLE_AUTO_SEED", "").lower() not in ("true", "1"):
+    auto_seed_requested = os.getenv("AUTO_SEED", "").lower() in ("true", "1")
+    auto_seed_disabled = os.getenv("DISABLE_AUTO_SEED", "").lower() in ("true", "1")
+    if (settings.ENVIRONMENT != "production" or auto_seed_requested) and not auto_seed_disabled:
         seed_database(db)
     yield
     # Shutdown logic: clean database client disconnect
@@ -33,9 +35,19 @@ cors_origins = [
     "http://127.0.0.1:3000",
 ]
 
+if settings.ALLOWED_ORIGINS:
+    for origin in settings.ALLOWED_ORIGINS.split(","):
+        cleaned = origin.strip()
+        if cleaned and cleaned not in cors_origins:
+            cors_origins.append(cleaned)
+
+import os
+allow_all_origins = os.getenv("ALLOW_ALL_ORIGINS", "").lower() in ("true", "1")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
+    allow_origins=cors_origins if not allow_all_origins else [],
+    allow_origin_regex=r".*" if allow_all_origins else None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -50,6 +62,16 @@ app.include_router(ai.router)
 app.include_router(admin.router)
 app.include_router(notifications.router)
 app.include_router(announcements.router)
+
+@app.get("/", tags=["Root"])
+def root():
+    return {
+        "service": "InternConnect AI API",
+        "status": "online",
+        "version": "1.0.0",
+        "docs": "/docs",
+        "health": "/api/health"
+    }
 
 @app.get("/api/health", tags=["Health"])
 def health_check():
